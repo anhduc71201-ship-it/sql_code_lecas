@@ -1,0 +1,96 @@
+1. Tạo bảng trong layer (DWH - Staging )
+  CREATE TABLE stg_content_mkt.fact_content_profile (
+      id VARCHAR PRIMARY KEY,         -- Khóa chính để xử lý ghi đè
+      business_id VARCHAR,
+      account_nm VARCHAR(255),
+      platform VARCHAR(50),           -- Cột để phân biệt tiktok, facebook, youtube...
+      is_active BOOLEAN DEFAULT TRUE, -- Trạng thái hoạt động của tài khoản
+      start_date DATE,
+      end_date DATE,
+      request_date TIMESTAMP,
+      -- Các metrics được bóc tách từ JSONB
+      likes INT DEFAULT 0,
+      comments INT DEFAULT 0,
+      shares INT DEFAULT 0,
+      video_views INT DEFAULT 0,
+      profile_views INT DEFAULT 0,
+      bio_click_links INT DEFAULT 0,
+      followers_count INT DEFAULT 0,
+      engaged_audience INT DEFAULT 0,
+      -- Cột kỹ thuật theo dõi thời gian nạp dữ liệu
+      etl_updated_at TIMESTAMP DEFAULT NOW()
+  );
+
+2. Tạo hàm xử lý (Trigger Function) có gán platform -> tự động upsert data từ schema raw_tiktok
+CREATE OR REPLACE FUNCTION stg_content_mkt.fn_upsert_content_profile_tiktok()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO stg_content_mkt.fact_content_profile (
+        id, business_id, account_nm, platform, is_active,
+        start_date, end_date, request_date, 
+        likes, comments, shares, video_views, profile_views, 
+        bio_click_links, followers_count, engaged_audience, 
+        etl_updated_at
+    )
+    VALUES (
+        NEW.id, NEW.business_id, NEW.account_nm, 'tiktok', TRUE,
+        NEW.start_date, NEW.end_date, NEW.request_date,
+        -- Trích xuất từ phần tử đầu tiên của mảng metrics
+        COALESCE((NEW.raw_json->'metrics'->0->>'likes')::INT, 0),
+        COALESCE((NEW.raw_json->'metrics'->0->>'comments')::INT, 0),
+        COALESCE((NEW.raw_json->'metrics'->0->>'shares')::INT, 0),
+        COALESCE((NEW.raw_json->'metrics'->0->>'video_views')::INT, 0),
+        COALESCE((NEW.raw_json->'metrics'->0->>'profile_views')::INT, 0),
+        COALESCE((NEW.raw_json->'metrics'->0->>'bio_link_clicks')::INT, 0),
+        COALESCE((NEW.raw_json->'metrics'->0->>'followers_count')::INT, 0),
+        COALESCE((NEW.raw_json->'metrics'->0->>'engaged_audience')::INT, 0),
+        NOW()
+    )
+    ON CONFLICT (id) DO UPDATE SET
+        business_id = EXCLUDED.business_id,
+        account_nm = EXCLUDED.account_nm,
+        likes = EXCLUDED.likes,
+        comments = EXCLUDED.comments,
+        shares = EXCLUDED.shares,
+        video_views = EXCLUDED.video_views,
+        profile_views = EXCLUDED.profile_views,
+        bio_click_links = EXCLUDED.bio_click_links,
+        followers_count = EXCLUDED.followers_count,
+        engaged_audience = EXCLUDED.engaged_audience,
+        etl_updated_at = NOW();
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+3. Insert lại các thông tin đã có sẵn trong raw_tiktok
+INSERT INTO stg_content_mkt.fact_content_profile (
+    id, business_id, account_nm, platform, is_active,
+    start_date, end_date, request_date, 
+    likes, comments, shares, video_views, profile_views, 
+    bio_click_links, followers_count, engaged_audience, 
+    etl_updated_at
+)
+SELECT 
+    id, business_id, account_nm, 'tiktok', TRUE,
+    start_date, end_date, request_date,
+    COALESCE((raw_json->'metrics'->0->>'likes')::INT, 0),
+    COALESCE((raw_json->'metrics'->0->>'comments')::INT, 0),
+    COALESCE((raw_json->'metrics'->0->>'shares')::INT, 0),
+    COALESCE((raw_json->'metrics'->0->>'video_views')::INT, 0),
+    COALESCE((raw_json->'metrics'->0->>'profile_views')::INT, 0),
+    COALESCE((raw_json->'metrics'->0->>'bio_link_clicks')::INT, 0),
+    COALESCE((raw_json->'metrics'->0->>'followers_count')::INT, 0),
+    COALESCE((raw_json->'metrics'->0->>'engaged_audience')::INT, 0),
+    NOW()
+FROM raw_tiktok.content_profile
+ON CONFLICT (id) DO UPDATE SET
+    likes = EXCLUDED.likes,
+    comments = EXCLUDED.comments,
+    shares = EXCLUDED.shares,
+    video_views = EXCLUDED.video_views,
+    profile_views = EXCLUDED.profile_views,
+    bio_click_links = EXCLUDED.bio_click_links,
+    followers_count = EXCLUDED.followers_count,
+    engaged_audience = EXCLUDED.engaged_audience,
+    etl_updated_at = NOW();
