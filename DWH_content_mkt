@@ -110,4 +110,5 @@
       etl_updated_at = NOW();
 
 5. Kiểm tra định kỳ: Thỉnh thoảng có thể chạy lệnh này để xem lần cuối cùng dữ liệu được cập nhật vào bảng Fact là khi nào:
+
 SELECT platform, MAX(etl_updated_at) FROM stg_content_mkt.fact_content_profile GROUP BY platform;
